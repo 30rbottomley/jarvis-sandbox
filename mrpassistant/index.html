@@ -37,6 +37,7 @@ body.red .state{color:#ff8a8a}
   <button id="cfg" title="Your standing instructions for JARVIS AI">⚙</button>
 </div>
 <form id="typeform" class="row" style="margin-top:12px"><input id="typed" placeholder="Or type to JARVIS…" autocomplete="off" style="flex:1;min-width:220px;max-width:420px;background:rgba(255,255,255,.06);color:var(--ink);border:1px solid rgba(255,255,255,.2);border-radius:999px;padding:11px 16px;font:inherit;-webkit-user-select:text;user-select:text"><button>Send</button></form>
+<div class="row" style="margin-top:10px;font-size:13px;color:var(--dim);align-items:center">Voice <select id="voice" style="background:rgba(255,255,255,.06);color:var(--ink);border:1px solid rgba(255,255,255,.2);border-radius:999px;padding:7px 12px;font:inherit;max-width:240px"><option>Loading voices…</option></select></div>
 <div class="acts" id="acts" style="font-size:13px;color:var(--glow);min-height:1.2em;margin-top:10px;text-align:center"></div>
 <div class="note">Teachers only. JARVIS AI sees class counts, today's lessons and your own to-do list, never student names. Hold to talk, let go to send.</div>
 <script src="../config.js"></script>
@@ -86,7 +87,7 @@ function speak(text){stopAll(true);text=String(text||'').trim();if(!text)return;
   const words=text.split(/(\s+)/);say.innerHTML=words.map((w,i)=>/\s/.test(w)?w:`<span class="w" data-i="${i}">${w.replace(/</g,'&lt;')}</span>`).join('');
   const spans=[...say.querySelectorAll('.w')];const starts=[];let pos=0;for(const w of words){if(!/\s/.test(w))starts.push(pos);pos+=w.length}
   const u=new SpeechSynthesisUtterance(text);u.rate=1.02;u.pitch=.9;
-  const v=speechSynthesis.getVoices();u.voice=v.find(x=>/Guy|Andrew|Christopher|Daniel|Ryan|David/i.test(x.name)&&/^en/i.test(x.lang))||v.find(x=>/^en-US/i.test(x.lang))||null;
+  u.voice=pickVoice();
   gotBoundary=false;
   const hit=(idx,len)=>{const w=text.substr(idx,len||12).split(/\s/)[0]||'';pulse(Math.min(1,.35+w.length*.07));if(/[.,!?;:]$/.test(w))flick=1;
     const k=starts.findLastIndex?starts.findLastIndex(s=>s<=idx):starts.map(s=>s<=idx).lastIndexOf(true);spans.forEach((s,j)=>s.classList.toggle('on',j<=k))};
@@ -114,6 +115,15 @@ document.getElementById('brief').onclick=()=>send('',true);
 document.getElementById('typeform').onsubmit=e=>{e.preventDefault();const t=document.getElementById('typed');const v=t.value.trim();if(v){t.value='';send(v)}};document.getElementById('stop').onclick=()=>{ if(handsFree) setHandsFree(false); stopAll(); };
 speechSynthesis.getVoices();speechSynthesis.onvoiceschanged=()=>{};
 
+// ---- voice choice: saved on this device ----
+const VKEY='jarvisAiVoice';
+const vq=x=>(/premium/i.test(x.name)?3:/enhanced|natural|neural/i.test(x.name)?2:0)+(/^en-US/i.test(x.lang)?1:0);
+function englishVoices(){return speechSynthesis.getVoices().filter(x=>/^en/i.test(x.lang)&&!/novelty|whisper|bells|bubbles|jester|organ|superstar|trinoids|zarvox|cellos|bad news|good news|boing|wobble|albert|fred|junior|kathy|ralph/i.test(x.name)).sort((a,b)=>vq(b)-vq(a)||a.name.localeCompare(b.name))}
+function pickVoice(){let saved=null;try{saved=localStorage.getItem(VKEY)}catch(_){}const v=englishVoices();return v.find(x=>x.voiceURI===saved||x.name===saved)||v[0]||null}
+function fillVoices(){const sel=document.getElementById('voice');if(!sel)return;const v=englishVoices();if(!v.length)return;const cur=pickVoice();
+  sel.innerHTML=v.map(x=>`<option value="${x.voiceURI.replace(/"/g,'&quot;')}" ${cur&&x.voiceURI===cur.voiceURI?'selected':''}>${x.name.replace(/</g,'&lt;')}${vq(x)>=2?' ★':''}</option>`).join('')}
+speechSynthesis.addEventListener?.('voiceschanged',fillVoices); setTimeout(fillVoices,300); setTimeout(fillVoices,1500);
+document.addEventListener('change',e=>{if(e.target.id==='voice'){try{localStorage.setItem(VKEY,e.target.value)}catch(_){} speak('This is how I sound now.')}});
 // ---- speech to text (Safari on iPhone, Edge/Chrome on Windows) ----
 const SR=window.SpeechRecognition||window.webkitSpeechRecognition;let rec=null,heard='',recOn=false,silT=null,hardT=null,handsFree=false,speaking=false,wake=null;
 const ERR={'not-allowed':'Microphone or speech is blocked. iPhone: Settings → Safari → Microphone → Allow, and Settings → Siri → turn on Dictation (or “Siri & Dictation”).','service-not-allowed':'Speech isn’t allowed here. If you opened this from the Home Screen, try it in Safari, or make sure Dictation is turned on in Settings.','network':'Speech needs internet. Check the connection.','audio-capture':'No microphone found.'};
