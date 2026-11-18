@@ -97,7 +97,11 @@ function speak(text){stopAll(true);text=String(text||'').trim();if(!text)return;
 function stopAll(keepRec){speechSynthesis.cancel();clearInterval(fallback);stopMic(keepRec);mode='idle';st.textContent='Standing by'}
 
 // ---- listening: lines follow mic level (push to talk) ----
-async function startMic(){stopAll();startRec();try{micStream=await navigator.mediaDevices.getUserMedia({audio:true});const ac=new (window.AudioContext||window.webkitAudioContext)();const src=ac.createMediaStreamSource(micStream);an=ac.createAnalyser();an.fftSize=1024;src.connect(an);an._ac=ac;mode='listen';st.textContent='Listening';hold.classList.add('live');document.body.classList.add('red');say.textContent='Listening…'}catch(e){say.textContent='Mic blocked. Allow the microphone for this page to try listening mode.'}}
+const IOS=/iPhone|iPad|iPod/.test(navigator.userAgent)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
+async function startMic(){stopAll();startRec();
+  // iPhone: only one thing can use the mic. Give it to speech recognition; the lines react to words instead.
+  if(IOS&&SR){mode='listen';st.textContent='Listening';hold.classList.add('live');document.body.classList.add('red');say.textContent='Listening…';return}
+  try{micStream=await navigator.mediaDevices.getUserMedia({audio:true});const ac=new (window.AudioContext||window.webkitAudioContext)();const src=ac.createMediaStreamSource(micStream);an=ac.createAnalyser();an.fftSize=1024;src.connect(an);an._ac=ac;mode='listen';st.textContent='Listening';hold.classList.add('live');document.body.classList.add('red');say.textContent='Listening…'}catch(e){say.textContent='Mic blocked. Allow the microphone for this page to try listening mode.'}}
 function stopMic(keepRec){if(!keepRec)endRec();if(micStream){micStream.getTracks().forEach(t=>t.stop());micStream=null}if(an){an._ac.close();an=null}hold.classList.remove('live');document.body.classList.remove('red');if(mode==='listen'){mode='idle';st.textContent='Standing by'}}
 const hold=document.getElementById('hold');
 let unlocked=false;function unlock(){if(unlocked)return;unlocked=true;try{const u=new SpeechSynthesisUtterance(' ');u.volume=0;speechSynthesis.speak(u)}catch(_){}} // iPhone only allows speech after a tap
@@ -110,7 +114,9 @@ speechSynthesis.getVoices();speechSynthesis.onvoiceschanged=()=>{};
 // ---- speech to text (Safari on iPhone, Edge/Chrome on Windows) ----
 const SR=window.SpeechRecognition||window.webkitSpeechRecognition;let rec=null,heard='',recOn=false;
 function startRec(){if(!SR){return}heard='';try{rec=new SR();rec.lang='en-US';rec.interimResults=true;rec.continuous=true;
-  rec.onresult=e=>{heard=[...e.results].map(r=>r[0].transcript).join(' ');say.textContent=heard||'Listening…'};
+  rec.onresult=e=>{heard=[...e.results].map(r=>r[0].transcript).join(' ');say.textContent=heard||'Listening…';pulse(.6)};
+  rec.onaudiostart=()=>pulse(.3);
+  rec.onerror=e=>{recOn=false;const m={'not-allowed':'Microphone or speech is blocked. iPhone: Settings → Safari → Microphone → Allow, and Settings → Siri → turn on Dictation (or “Siri & Dictation”).','service-not-allowed':'Speech isn’t allowed here. If you opened this from the Home Screen, try it in Safari, or make sure Dictation is turned on in Settings.','no-speech':'I didn’t hear anything. Hold the button while you talk.','network':'Speech needs internet. Check the connection.','audio-capture':'No microphone found.'}[e.error]||('Speech error: '+e.error);say.textContent=m;stopMic(true)};
   rec.onend=()=>{if(recOn){recOn=false;const t=heard.trim();if(t)send(t);else say.textContent='I didn’t hear anything. Hold the button while you talk.'}};
   recOn=true;rec.start()}catch(_){}}
 function endRec(){if(rec&&recOn){try{rec.stop()}catch(_){}}}
