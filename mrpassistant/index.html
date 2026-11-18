@@ -24,6 +24,7 @@ textarea{width:min(92vw,560px);margin-top:14px;background:var(--panel);color:var
 .note{max-width:560px;font-size:12px;color:var(--dim);text-align:center;margin-top:14px;line-height:1.5}
 body.red{background:radial-gradient(ellipse at 50% 35%,#3a0c0c 0%,#140404 70%)}
 body.red .state{color:#ff8a8a}
+#hold{touch-action:none;-webkit-touch-callout:none}
 </style></head><body>
 <h1>J · A · R · V · I · S</h1>
 <div class="stage"><canvas id="c"></canvas><div class="state" id="state">Standing by</div></div>
@@ -31,6 +32,7 @@ body.red .state{color:#ff8a8a}
 <div class="row">
   <button id="brief">☀ Briefing</button>
   <button id="hold" class="hold">🎙 Hold to talk</button>
+  <button id="hf">🚗 Hands-free</button>
   <button id="stop">■ Stop</button>
   <button id="cfg" title="Your standing instructions for JARVIS AI">⚙</button>
 </div>
@@ -89,10 +91,10 @@ function speak(text){stopAll(true);text=String(text||'').trim();if(!text)return;
   const hit=(idx,len)=>{const w=text.substr(idx,len||12).split(/\s/)[0]||'';pulse(Math.min(1,.35+w.length*.07));if(/[.,!?;:]$/.test(w))flick=1;
     const k=starts.findLastIndex?starts.findLastIndex(s=>s<=idx):starts.map(s=>s<=idx).lastIndexOf(true);spans.forEach((s,j)=>s.classList.toggle('on',j<=k))};
   u.onboundary=e=>{if(e.name&&e.name!=='word')return;gotBoundary=true;hit(e.charIndex,e.charLength)};
-  u.onstart=()=>{mode='speak';st.textContent='Speaking';
+  u.onstart=()=>{speaking=true;mode='speak';st.textContent='Speaking';
     // Some online voices don't report word timing; estimate it so the lines still move.
     let i=0;fallback=setInterval(()=>{if(gotBoundary){clearInterval(fallback);return}if(i>=starts.length){clearInterval(fallback);return}hit(starts[i]);i++},300/u.rate)};
-  u.onend=u.onerror=()=>{clearInterval(fallback);mode='idle';st.textContent='Standing by';spans.forEach(s=>s.classList.add('on'))};
+  u.onend=u.onerror=()=>{speaking=false;clearInterval(fallback);mode='idle';st.textContent=handsFree?'Hands-free':'Standing by';spans.forEach(s=>s.classList.add('on'));if(handsFree)setTimeout(listenLoop,450)};
   speechSynthesis.speak(u)}
 function stopAll(keepRec){speechSynthesis.cancel();clearInterval(fallback);stopMic(keepRec);mode='idle';st.textContent='Standing by'}
 
@@ -100,26 +102,43 @@ function stopAll(keepRec){speechSynthesis.cancel();clearInterval(fallback);stopM
 const IOS=/iPhone|iPad|iPod/.test(navigator.userAgent)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
 async function startMic(){stopAll();startRec();
   // iPhone: only one thing can use the mic. Give it to speech recognition; the lines react to words instead.
-  if(IOS&&SR){mode='listen';st.textContent='Listening';hold.classList.add('live');document.body.classList.add('red');say.textContent='Listening…';return}
+  if(IOS&&SR){listenUI(true);say.textContent='Listening…';return}
   try{micStream=await navigator.mediaDevices.getUserMedia({audio:true});const ac=new (window.AudioContext||window.webkitAudioContext)();const src=ac.createMediaStreamSource(micStream);an=ac.createAnalyser();an.fftSize=1024;src.connect(an);an._ac=ac;mode='listen';st.textContent='Listening';hold.classList.add('live');document.body.classList.add('red');say.textContent='Listening…'}catch(e){say.textContent='Mic blocked. Allow the microphone for this page to try listening mode.'}}
 function stopMic(keepRec){if(!keepRec)endRec();if(micStream){micStream.getTracks().forEach(t=>t.stop());micStream=null}if(an){an._ac.close();an=null}hold.classList.remove('live');document.body.classList.remove('red');if(mode==='listen'){mode='idle';st.textContent='Standing by'}}
 const hold=document.getElementById('hold');
 let unlocked=false;function unlock(){if(unlocked)return;unlocked=true;try{const u=new SpeechSynthesisUtterance(' ');u.volume=0;speechSynthesis.speak(u)}catch(_){}} // iPhone only allows speech after a tap
 document.addEventListener('pointerdown',unlock,{capture:true});
-hold.addEventListener('pointerdown',e=>{e.preventDefault();startMic()});['pointerup','pointerleave','pointercancel'].forEach(ev=>hold.addEventListener(ev,stopMic));
+hold.addEventListener('pointerdown',e=>{e.preventDefault();startMic()});['pointerup','pointerleave','pointercancel','touchend','touchcancel'].forEach(ev=>hold.addEventListener(ev,()=>stopMic()));
+document.getElementById('hf').onclick=()=>setHandsFree(!handsFree);
 document.getElementById('brief').onclick=()=>send('',true);
-document.getElementById('typeform').onsubmit=e=>{e.preventDefault();const t=document.getElementById('typed');const v=t.value.trim();if(v){t.value='';send(v)}};document.getElementById('stop').onclick=stopAll;
+document.getElementById('typeform').onsubmit=e=>{e.preventDefault();const t=document.getElementById('typed');const v=t.value.trim();if(v){t.value='';send(v)}};document.getElementById('stop').onclick=()=>{ if(handsFree) setHandsFree(false); stopAll(); };
 speechSynthesis.getVoices();speechSynthesis.onvoiceschanged=()=>{};
 
 // ---- speech to text (Safari on iPhone, Edge/Chrome on Windows) ----
-const SR=window.SpeechRecognition||window.webkitSpeechRecognition;let rec=null,heard='',recOn=false;
-function startRec(){if(!SR){return}heard='';try{rec=new SR();rec.lang='en-US';rec.interimResults=true;rec.continuous=true;
-  rec.onresult=e=>{heard=[...e.results].map(r=>r[0].transcript).join(' ');say.textContent=heard||'Listening…';pulse(.6)};
+const SR=window.SpeechRecognition||window.webkitSpeechRecognition;let rec=null,heard='',recOn=false,silT=null,hardT=null,handsFree=false,speaking=false,wake=null;
+const ERR={'not-allowed':'Microphone or speech is blocked. iPhone: Settings → Safari → Microphone → Allow, and Settings → Siri → turn on Dictation (or “Siri & Dictation”).','service-not-allowed':'Speech isn’t allowed here. If you opened this from the Home Screen, try it in Safari, or make sure Dictation is turned on in Settings.','network':'Speech needs internet. Check the connection.','audio-capture':'No microphone found.'};
+function startRec(){if(!SR||recOn){return}heard='';clearTimeout(silT);clearTimeout(hardT);
+  try{rec=new SR();rec.lang='en-US';rec.interimResults=true;rec.continuous=true;
+  rec.onresult=e=>{heard=[...e.results].map(r=>r[0].transcript).join(' ');say.textContent=heard||'Listening…';pulse(.6);
+    if(handsFree){clearTimeout(silT);silT=setTimeout(finishRec,1500)}};   // hands-free: a 1.5 s pause sends it
   rec.onaudiostart=()=>pulse(.3);
-  rec.onerror=e=>{recOn=false;const m={'not-allowed':'Microphone or speech is blocked. iPhone: Settings → Safari → Microphone → Allow, and Settings → Siri → turn on Dictation (or “Siri & Dictation”).','service-not-allowed':'Speech isn’t allowed here. If you opened this from the Home Screen, try it in Safari, or make sure Dictation is turned on in Settings.','no-speech':'I didn’t hear anything. Hold the button while you talk.','network':'Speech needs internet. Check the connection.','audio-capture':'No microphone found.'}[e.error]||('Speech error: '+e.error);say.textContent=m;stopMic(true)};
-  rec.onend=()=>{if(recOn){recOn=false;const t=heard.trim();if(t)send(t);else say.textContent='I didn’t hear anything. Hold the button while you talk.'}};
-  recOn=true;rec.start()}catch(_){}}
-function endRec(){if(rec&&recOn){try{rec.stop()}catch(_){}}}
+  rec.onerror=e=>{if(e.error==='no-speech'||e.error==='aborted'){return} recOn=false;say.textContent=ERR[e.error]||('Speech error: '+e.error);
+    if(handsFree&&(e.error==='not-allowed'||e.error==='service-not-allowed')) setHandsFree(false); listenUI(false)};
+  rec.onend=()=>{ if(recOn) finishRec(); else if(handsFree&&!busy&&!speaking) setTimeout(listenLoop,300) };
+  recOn=true;rec.start()}catch(_){recOn=false}}
+function finishRec(){ if(!recOn) return; recOn=false; clearTimeout(silT); clearTimeout(hardT); try{rec.abort()}catch(_){} listenUI(false);
+  const t=heard.trim(); heard='';
+  if(t) send(t); else if(handsFree) setTimeout(listenLoop,300); else say.textContent='I didn’t hear anything. Hold the button while you talk.'; }
+// Letting go of the button: stop, give iPhone a moment to deliver the last words, then send no matter what.
+function endRec(){ if(!rec||!recOn) return; try{rec.stop()}catch(_){} clearTimeout(hardT); hardT=setTimeout(finishRec,700); }
+function listenUI(on){ hold.classList.toggle('live',on); document.body.classList.toggle('red',on); if(on){mode='listen';st.textContent='Listening'} else if(mode==='listen'){mode='idle';st.textContent=handsFree?'Hands-free':'Standing by'} }
+// ---- hands-free: listens, sends after you pause, talks back, listens again ----
+function listenLoop(){ if(!handsFree||busy||speaking||recOn) return; startRec(); if(recOn){ listenUI(true); say.textContent='Listening… just talk.'; } }
+async function setHandsFree(on){ handsFree=on; const b=document.getElementById('hf'); b.classList.toggle('hold',on); b.textContent=on?'🚗 Hands-free: ON':'🚗 Hands-free';
+  hold.style.display=on?'none':'';
+  if(on){ try{ wake=await navigator.wakeLock?.request('screen'); }catch(_){} speak('Hands-free on. Just talk, and pause when you’re done.'); }
+  else { try{wake&&wake.release()}catch(_){} wake=null; if(recOn){recOn=false;try{rec.abort()}catch(_){} } listenUI(false); st.textContent='Standing by'; } }
+document.addEventListener('visibilitychange',async()=>{ if(handsFree&&document.visibilityState==='visible'){ try{ wake=await navigator.wakeLock?.request('screen'); }catch(_){} } });
 if(!SR) setTimeout(()=>{if(!busy) say.textContent='Voice input isn’t available in this browser, so type below. JARVIS can still talk back.'},1500);
 
 // ---- JARVIS connection ----
@@ -144,7 +163,7 @@ async function send(text,briefing){
     if(data.actions&&data.actions.length) document.getElementById('acts').textContent='✓ '+data.actions.join(' · ');
     speak(data.reply);
   }catch(_){ clearInterval(think); say.textContent='I couldn’t reach JARVIS.'; }
-  finally{ busy=false; if(mode==='think'){mode='idle';st.textContent='Standing by'} }
+  finally{ busy=false; if(mode==='think'){mode='idle';st.textContent=handsFree?'Hands-free':'Standing by'} if(handsFree&&!speaking) setTimeout(listenLoop,600) }
 }
 let myPid=null;
 document.getElementById('cfg').onclick=async()=>{ if(!sb||!myPid) return;
